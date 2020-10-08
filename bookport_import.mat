@@ -1,0 +1,231 @@
+#!/bin/bash
+
+#SKRIPT PRO IMPORT E-KNIH KOLEKCE BOOKPORT
+
+# 1. download feed with marcxml data from bookport
+# 2. delete find records to delete: export current data from Aleph, extract bookport id from this and the feed, compare both. If more than ca 10 (parameter) to delte found, send email instead of force delete
+# 3. match manage36
+# 3.1. new reords 
+# 3.1.1. match by isbn to find print versions
+# 3.1.2. if printed found - import just certain fields
+# 3.1.3. if not found - modify the record and import as new
+# 3.2. 1 match update 856 : compare using restapi if url has changed. if so, update it
+# 3.3. more then 1 match - mail alert
+
+#  By Matyas Bajger @osu.cz 202009
+
+#INITAL PARAMETERS
+BIBbase='OSU01'
+adminMail='matyas.bajger@osu.cz' #send reports, errors, alerts to this address
+bookportFeed='https://www.bookport.cz/marc21.xml' #URL where current data of available e-books can be downloaded in MarcXML format
+maxRecsToDel=10 #if more records found for deleting than this limit, it is treated as a potential error. No recs are really deleted, just an email is send to $aminMail
+
+
+checkFileExists() 
+	{
+	#if some temporary result not found, send mail alert and dia
+	#ARG1 filename with full path   ARG2 purpose of this file for mail alert
+	if [ ! -f "$1" ]; then
+		printf "\n ERROR - output file of $2 NOT FOUND. The script is terminating... `date`\n"
+		mail -s "bookport_import ERROR -  file $1 that is output of $2 NOT FOUND. Terminating the script"  $adminMail </dev/null
+		exit 1	
+	fi
+	}
+
+checkFileNotZero() 
+	{
+	#if some temporary result file has zero size as potential error, send mail alert and dia
+	#ARG1 filename with full path   ARG2 purpose of this file for mail alert
+	if [ ! -s "$1" ]; then
+		printf "\n ERROR - file $1 that is output of $2 HAS ZERO SIZE. The script is terminating... `date`\n"
+		mail -s "bookport_import ERROR -  file $1 that is output of $2 HAS ZERO SIZE. Terminating the script"  $adminMail </dev/null
+		exit 1	
+	fi
+	}
+BIBbase=`echo $BIBbase | aleph_tr -u`
+BIBbaseLowerCase=`echo $BIBbase | aleph_tr -l`
+dataScratch="$alephe_dev/$BIBbaseLowerCase/scratch"
+rm -f $dataScratch/bookport.tmp*
+dnes=`date +%Y%m%d`
+mailReport="$dataScratch/bookport_$dnes.mail"
+
+
+#download feed
+printf "START `date`\n\n"
+echo "downloading feed from $bookportFeed"
+bkpData="bookport_feed_$dnes.xml";
+curl -k "$bookportFeed" >"$alephe_scratch/$bkpData"
+checkFileExists "$alephe_scratch/$bkpData" 'download Bookport xml feed';
+checkFileNotZero "$alephe_scratch/$bkpData" 'download Bookport xml feed';
+cp "$alephe_scratch/$bkpData" "$dataScratch/$bkpData"
+printf 'Downloaded Bookport feed with '` xmllint -xpath "count(//*[local-name()='record'])" $alephe_scratch/$bkpData `" recs in total.\n\n" | tee -a $mailReport
+printf "OK\n\n";
+
+#DELETE: extract bookport ids from feed and database, compare and delete records that are currently not in feed
+#get IDs from feed
+echo DELETE
+xmllint -xpath "//*[local-name()='controlfield' and @tag='001']" "$alephe_scratch/$bkpData" | sed 's/<\s*marc[^>]*>//g' | sed 's/<\s*\/\s*marc[^>]*>/>/g' | tr '>' '\n' | sort -u >$dataScratch/bookport.tmp.feedids
+checkFileExists "$dataScratch/bookport.tmp.feedids" 'extract ids from xml feed'
+checkFileNotZero "$dataScratch/bookport.tmp.feedids" 'extract ids from xml feed'
+#iget IDs from database
+echo "Running procedure ret-03 retrieving current bookport data, log is $dataScratch/bookport.$dnes.ret03"
+csh -f $aleph_proc/p_ret_03 "$BIBbase,bookport.sysna,wbs=bookp@@042," >"$dataScratch/bookport.$dnes.ret03"
+checkFileExists "$alephe_scratch/bookport.sysna" 'retrieving current Bookport recs in database ret-03'
+checkFileNotZero "$alephe_scratch/bookport.sysna" 'retrieving current Bookport recs in database ret-03'
+
+echo "Running procedure print-03 retrieving current bookport data, log is $dataScratch/bookport.$dnes.print03"
+csh -f $aleph_proc/p_print_03 "$BIBbase,bookport.sysna,ALL,,,,,,,,bookport.$dnes.seq,A,,Z30,,N," >"$dataScratch/bookport.$dnes.print03"
+checkFileExists "$dataScratch/bookport.$dnes.seq" 'retrieving current Bookport recs in database print-03'
+checkFileNotZero "$alephe_scratch/bookport.sysna" 'retrieving current Bookport recs in database print-03'
+grep '^......... BOOKP' $dataScratch/bookport.$dnes.seq | sed 's/^.*\$\$a//' | sort -u > $dataScratch/bookport.tmp.dataids
+#compare
+comm -13 "$dataScratch/bookport.tmp.feedids" "$dataScratch/bookport.tmp.dataids" >$alephe_scratch/bookport.$dnes.ids2delete
+noRecToDel=`grep $ -c $alephe_scratch/bookport.$dnes.ids2delete`
+if [ $noRecToDel -eq 0 ]; then
+	printf "No records has been withdrawn from the collection, nothing to delete.\n\n" | tee -a $mailReport
+elif [  $noRecToDel -gt $maxRecsToDel ]; then
+	printf "WARNING. $noRecToDel found to be deleted. This is more than limit $maxRecsToDel set by variable maxRecsToDel.\nThis could be an error. NO RECORDS WILL BE DELETED.\nI just send mail alert to $adminMail.\n\n" | tee -a $mailReport
+        mail -s 'TOO many records from Bookport to be deleted.' $adminMail < $alephe_scratch/bookport.$dnes.ids2delete
+else
+	#delete
+	sed -i 's/^/\$\$a/' "$alephe_scratch/bookport.$dnes.ids2delete"
+	grep -f "$alephe_scratch/bookport.$dnes.ids2delete" "$dataScratch/bookport.$dnes.seq" >"$dataScratch/bookport.$dnes.2del"
+	printf "Running procedure manage-18 deleting records that has been withdrawn from the collection, log is  $dataScratch/bookport.$dnes.manage-18.delete\n\n"
+        csh -f $aleph_proc/p_manage_18 "$BIBbase,bookport.$dnes.2del,bookport.$dnes.2del.reject,bookport.$dnes.2del.doc_log,OLD,,,FULL,DELDOC,M,,,bookport," >$dataScratch/bookport.$dnes.manage-18.delete
+        if [ -s "$data_scratch/bookport.$dnes.2del.reject" ]; then
+		printf "ERROR - some records has not been deleted - see file $dataScratch/bookport.$dnes.2del.reject  :\n"
+		cat $dataScratch/bookport.$dnes.2del.reject
+		mail -s 'bookport_import.mat ERROR - some records COULD NOT BE DELETED - might have physical items - see body' $adminMail < $dataScratch/bookport.$dnes.2del.reject
+		printf "ERROR - some records has not been deleted, might have physical items see file $dataScratch/bookport.$dnes.2del.reject  :\n" | tee -a $mailReport
+		cat $dataScratch/bookport.$dnes.2del.reject | tee -a $mailReport
+		printf "\n\n\n" | tee -a $mailReport
+	fi
+        printf `grep $ -c $alephe_scratch/bookport.$dnes.2del.doc_log`" records has been DELETED from the catalogue. Their list is here: $alephe_scratch/bookport.$dnes.2del.doc_log\n\n" | tee -a $mailReport
+fi
+	
+#convert xml data feed from marcxml and compare with database
+echo "Running procedure file-02 - conversion from MarcXML to Aleph sequential, log is $dataScratch/bookport.$dnes.file02"
+bkpDataSeq=`echo $bkpData | sed 's/\.xml/\.seq/'`
+csh -f $aleph_proc/p_file_02 "$BIBbase,$bkpData,$bkpDataSeq,06," >$dataScratch/bookport.$dnes.file02
+checkFileExists "$dataScratch/$bkpDataSeq" 'conversion from MarcXML to Sequential format file-02';
+checkFileNotZero "$dataScratch/$bkpDataSeq" 'conversion from MarcXML to Sequential format file-02';
+printf "O.K.\n\n"
+
+
+#match against Bookport ID
+#change 001 field - add prefix and copy the ID to BOOKP field
+awk '{if (substr($0,11,5)=="001  ") { print substr($0,1,18)"bookport"substr($0,19); print substr($0,1,10)"BOOKP L $$a"substr($0,19)} else {print $0;} }' $dataScratch/$bkpDataSeq >$dataScratch/$bkpDataSeq.tmp
+mv -f $dataScratch/$bkpDataSeq.tmp $dataScratch/$bkpDataSeq
+cp $dataScratch/$bkpDataSeq $alephe_scratch/$bkpDataSeq
+echo "Running procedure manage-36, match seek by Bookport ID, log is $dataScratch/bookport.$dnes.manage36-bookportid"
+csh -f $aleph_proc/p_manage_36 "$BIBbase,$bkpDataSeq,$bkpDataSeq.new,$bkpDataSeq.match,$bkpDataSeq.multi,BOOKP,,,N," > $dataScratch/bookport.$dnes.manage36-bookportid
+checkFileExists "$dataScratch/$bkpDataSeq.new" 'matching the downloaded recs. aginst DB by Bookport ID - new records manage-36';
+checkFileExists "$dataScratch/$bkpDataSeq.match" 'matching the downloaded recs. aginst DB by Bookport ID - match records manage-36 ';
+checkFileExists "$dataScratch/$bkpDataSeq.multi" 'matching the downloaded recs. aginst DB by Bookport ID - more-than-one-match records manage-36';
+
+#new
+#new records - match by ISBN to find printed versions
+printf "Now, "`awk '{print $1;}' $dataScratch/$bkpDataSeq.new | sort -u | grep $ -c`" records found as NEW in the feed data.\n" | tee -a $mailReport
+
+if [ -s "$dataScratch/$bkpDataSeq.new" ]; then
+   echo "Running match by ISBN on them, manage-36, to find printed versions in the library collection. Log file is: $dataScratch/bookport.$dnes.manage36-isbn"
+   csh -f $aleph_proc/p_manage_36 "$BIBbase,$bkpDataSeq.new,$bkpDataSeq.new.ISBNnew,$bkpDataSeq.new.ISBNmatch,$bkpDataSeq.new.ISBNmulti,ISBN,,,N," > $dataScratch/bookport.$dnes.manage36-isbn
+   checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNnew" 'matching the downloaded recs. aginst DB by ISBN - find printed versions manage-36';
+   checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNmatch" 'matching the downloaded recs. aginst DB by ISBN - find printed versions manage-36';
+   checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNmulti" 'matching the downloaded recs. aginst DB by ISBN - find printed versions manage-36';
+
+	#ISBN new -completele new, import
+        if [ -s "$dataScratch/$bkpDataSeq.new.ISBNnew" ]; then
+      	   printf "Found "`awk '{print $1;}' $dataScratch/$bkpDataSeq.new.ISBNnew | sort -u | grep $ -c`" completely new records. Now importing them by manage-18,  log is $dataScratch/bookport.$dnes.manage18-new\n"
+# DEBUG import 9 recs only - for testing
+#grep '^00000000[0-9]'  $dataScratch/$bkpDataSeq.new.ISBNnew > $dataScratch/$bkpDataSeq.new.ISBNnew.tmp
+#mv  $dataScratch/$bkpDataSeq.new.ISBNnew.tmp  $dataScratch/$bkpDataSeq.new.ISBNnew
+# DEBUG end
+	   csh -f $aleph_proc/p_manage_18 "$BIBbase,$bkpDataSeq.new.ISBNnew,bookport_new_$dnes.reject,bookport_new_$dnes.doc_log,NEW,BOOKP,,FULL,APP,M,,,bookport," >$dataScratch/bookport.$dnes.manage18-new
+	   checkFileExists "$dataScratch/bookport_new_$dnes.reject" 'Import new records, manage-18, file with reject records';
+	   checkFileExists "$alephe_scratch/bookport_new_$dnes.doc_log" 'Import new records, manage-18, file with imported records';
+           printf "Imported "`awk '{print $1;}' $alephe_scratch/bookport_new_$dnes.doc_log | sort -u | grep $ -c`" NEW records. Their list - sysnos:\n" | tee -a $mailReport
+           awk '{print $1;}' $alephe_scratch/bookport_new_$dnes.doc_log | sort -u | tee -a $mailReport
+           printf "\n" | tee -a $mailReport
+           if [ -s "$dataScratch/bookport_new_$dnes.reject" ]; then
+	      printf "WARNING - on importing new records, "`awk '{print $1;}' $dataScratch/bookport_new_$dnes.reject | sort -u | grep $ -c` " records WERE REJECTED for some reason.\nTheir list is $dataScratch/bookport_new_$dnes.reject\n" | tee -a $mailReport
+	   fi
+	else
+	   printf "No NEW records found for importing.\n\n" | tee -a $mailReport
+	fi
+	#ISBN match -printed version found, update - add jut certain fields: 020, 856, BOOKP
+        if [ -s "$dataScratch/$bkpDataSeq.new.ISBNmatch" ]; then
+	   printf "Found "
+           awk '{print $1;}' $dataScratch/$bkpDataSeq.new.ISBNmatch | sort -u | grep $ -c 
+           printf " new records that match by ISBN to printed version.\n"
+           printf "        They will be merged.\nNow modifying them by manage-25, log is $dataScratch/bookport.$dnes.manage25.isbn-update\n"
+	   #modify records by program - fix BOOKP
+           cp -v "$dataScratch/$bkpDataSeq.new.ISBNmatch" "$dataScratch/bii"
+           csh -f $aleph_proc/p_manage_25 "$BIBbase,bii,$bkpDataSeq.new.ISBNmatch.man25,$bkpDataSeq.new.ISBNmatch.man25_refused,,,BOOKP,,Y,OSU," >$dataScratch/bookport.$dnes.manage25.isbn-update
+           rm -f "$dataScratch/bii"
+           checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNmatch.man25" 'Update records to print match/update, manage-25, updated records - procedure results';
+           checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNmatch.man25_refused" 'Update records to print match/update, manage-25, refused records - procedure results';
+           if [ -s "$dataScratch/$bkpDataSeq.new.ISBNmatch.man25_refused" ]; then
+              printf "WARNING - on procedure changing records for print match/update, "`awk '{print $1;}' $dataScratch/$bkpDataSeq.new.ISBNmatch.man25_refused | sort -u | grep $ -c` " records WERE REJECTED by manage-25 for some reason.\nTheir list is $dataScratch/$bkpDataSeq.new.ISBNmatch.man25_refused\n" | tee -a $mailReport
+           fi
+           if [ -s "$dataScratch/$bkpDataSeq.new.ISBNmatch.man25" ]; then
+	      #select fields and import them
+              grep -e '^......... 020' -e '^......... 856' -e '^......... BOOKP' $dataScratch/$bkpDataSeq.new.ISBNmatch.man25 | grep -v 'q.print' >$dataScratch/$bkpDataSeq.new.ISBNmatch.2imp
+              printf "Adding ebook fields to printed versions, manage-18, its logfile is $dataScratch/bookport.$dnes.manage18-printed-update.\n"
+	      csh -f $aleph_proc/p_manage_18 "$BIBbase,$bkpDataSeq.new.ISBNmatch.2imp,$bkpDataSeq.new.ISBNmatch.2imp.reject,$bkpDataSeq.new.ISBNmatch.2imp.doc_log,OLD,,,FULL,APP,M,,,bookport," >$dataScratch/bookport.$dnes.manage18-printed-update
+              checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNmatch.2imp.reject" 'Add ebook to printed records, manage-18, file with reject records';
+              mv "$alephe_scratch/$bkpDataSeq.new.isbnmatch.2imp.doc_log" "$alephe_scratch/$bkpDataSeq.new.ISBNmatch.2imp.doc_log"
+	      checkFileExists "$alephe_scratch/$bkpDataSeq.new.ISBNmatch.2imp.doc_log" 'Add ebook to printed records, manage-18, file with imported records';
+	      printf "Ebook fields add to "`awk '{print $1;}' $alephe_scratch/$bkpDataSeq.new.ISBNmatch.2imp.doc_log | sort -u | grep $ -c`" PRINTED records. Their list - sysnos:\n" | tee -a $mailReport
+              awk '{print $1;}' $alephe_scratch/$bkpDataSeq.new.ISBNmatch.2imp.doc_log | sort -u | tee -a $mailReport
+              printf "\n" | tee -a $mailReport
+              if [ -s "$dataScratch/$bkpDataSeq.new.ISBNmatch.2imp.reject" ]; then
+                 printf "WARNING - on adding ebook fields to printed records, "`awk '{print $1;}' $dataScratch/$bkpDataSeq.new.ISBNmatch.2imp.reject | sort -u | grep $ -c` " records WERE REJECTED for some reason.\nTheir list is $dataScratch/$bkpDataSeq.new.ISBNmatch.2imp.reject\n" | tee -a $mailReport
+              fi
+           fi
+        else
+           printf "No records matching printed isbn found for adding ebook versions to them.\n\n" | tee -a $mailReport
+        fi
+	#ISBNmutli - warning
+        if [ -s "$dataScratch/$bkpDataSeq.new.ISBNmulti" ]; then
+	   printf "WARNING - tring to append ebook fields to printed records, the following ebook records matched to more than one isbn in the catalogue. It is not clear, to which record they belong. Check it manually:\n" | tee -a $mailReport
+           cat $dataScratch/$bkpDataSeq.new.ISBNmulti | tee -a $mailReport
+	   printf "\n\n\n" | tee -a $mailReport
+	fi
+else
+   printf "Nothing new to import.\n" |  tee -a $mailReport
+fi
+
+#match
+#bookprot recs (ID match) that ale already in the catalogue, just URL to fulltext is updated
+if [ -s "$dataScratch/$bkpDataSeq.match" ]; then
+   printf "Found "`awk '{print $1;}' $dataScratch/$bkpDataSeq.match | sort -u | grep $ -c`" records already existing in the catalogue, updating hteir URL link to fulltext in 85640 field.\n" | tee -a $mailReport
+   printf "Running program-fix manage-25 to update 856 fields, log is $dataScratch/bookport.$dnes.manage25.update\n" | tee -a $mailReport
+   cp "$dataScratch/$bkpDataSeq.match" "$dataScratch/bim"
+   csh -f $aleph_proc/p_manage_25 "$BIBbase,bim,$bkpDataSeq.match.man25,$bkpDataSeq.match.man25_refused,,,BOKP2,,Y,OSU," >$dataScratch/bookport.$dnes.manage25.update
+   rm -f "$dataScratch/bim"
+   checkFileExists "$dataScratch/$bkpDataSeq.match.man25" 'Update records - 856 link, manage-25, updated records - procedure results';
+   checkFileExists "$dataScratch/$bkpDataSeq.match.man25_refused" 'Update records - 856 link`, manage-25, refused records - procedure results';
+   printf "Running manage-18 to update 85640 field - URL to fulltext, log is $dataScratch/bookport.$dnes.manage18.update\n" | tee -a $mailReport
+   grep '^......... 85640' $dataScratch/$bkpDataSeq.match.man25 >$dataScratch/bookport.$dnes.manage18-url-update
+   cp "$dataScratch/bookport.$dnes.manage18-url-update" $dataScratch/buu
+   csh -f $aleph_proc/p_manage_18 "$BIBbase,buu,$bkpDataSeq.match.856.reject,$bkpDataSeq.match.856.doc_log,OLD,,,FULL,APP,M,,,bookport," >$dataScratch/bookport.$dnes.manage18.update
+   rm -f $dataScratch/buu
+   checkFileExists "$dataScratch/$bkpDataSeq.match.856.reject" 'Update 856 link to fulltext, manage-18, file with reject records';
+   checkFileExists "$alephe_scratch/$bkpDataSeq.match.856.doc_log" 'Update 856 link to fulltext, manage-18, file with imported records';
+   printf "Now, "`grep $ -c $alephe_scratch/$bkpDataSeq.match.856.doc_log`" records have been updated - 856 field iwith link to fulltext from the current Bookport feed" | tee -a $mailReport
+else
+   printf "WARNING - no records with matching Bookport ID found - this is curious, there should be some, if this is not the very first import.\n\n" | tee -a $mailReport
+fi
+
+#multiod
+if [ -s "$dataScratch/$bkpDataSeq.multi" ]; then
+   printf "WARNING - following recors to import match to more than one Bookport ID in the Catalogue. This ID should be unique! This is rather Error worthy of checking :\n" | tee -a $mailReport
+   cat $dataScratch/$bkpDataSeq.multi | tee -a $mailReport
+   printf "\n\n\n" | tee -a $mailReport
+fi
+
+mail -s "Bookport import results" $adminMail <$mailReport
+
+printf "\n" 
+printf "END `date`\n\n"
