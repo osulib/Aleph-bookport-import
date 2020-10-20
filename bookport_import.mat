@@ -19,7 +19,11 @@ BIBbase='OSU01'
 adminMail='matyas.bajger@osu.cz' #send reports, errors, alerts to this address
 bookportFeed='https://www.bookport.cz/marc21.xml' #URL where current data of available e-books can be downloaded in MarcXML format
 maxRecsToDel=10 #if more records found for deleting than this limit, it is treated as a potential error. No recs are really deleted, just an email is send to $aminMail
-
+minRecsInFeed=1000 #if less records found in the downloaded feed data, it is treated as a potential error and script is terminated
+xServerURL='http://katalog.osu.cz' #URL  to Aleph X-Server API
+xServerUser='X-UPD-DOC' #User with rights to update doc by x-serverURL 
+xServerPassword='SteSpaq8' #      password 4 this user
+bookportURLft='www.bookport.cz' #URL full text @ Bookport. It is used to differ this link from links to FT from other providers
 
 checkFileExists() 
 	{
@@ -53,12 +57,20 @@ mailReport="$dataScratch/bookport_$dnes.mail"
 #download feed
 printf "START `date`\n\n"
 echo "downloading feed from $bookportFeed"
-bkpData="bookport_feed_$dnes.xml";
-curl -k "$bookportFeed" >"$alephe_scratch/$bkpData"
+#TODO asas feed bzl praydny, p[rebito starsim downloaded, az bude plny pust to, Matyas 20201020
+bkpData="bookport_feed_20201008.xml";
+#bkpData="bookport_feed_$dnes.xml";
+#curl -k "$bookportFeed" -o "$alephe_scratch/$bkpData"
 checkFileExists "$alephe_scratch/$bkpData" 'download Bookport xml feed';
 checkFileNotZero "$alephe_scratch/$bkpData" 'download Bookport xml feed';
 cp "$alephe_scratch/$bkpData" "$dataScratch/$bkpData"
-printf 'Downloaded Bookport feed with '` xmllint -xpath "count(//*[local-name()='record'])" $alephe_scratch/$bkpData `" recs in total.\n\n" | tee -a $mailReport
+recsInFeed=`xmllint -xpath "count(//*[local-name()='record'])" $alephe_scratch/$bkpData`
+printf "Downloaded Bookport feed with $recsInFeed recs in total.\n\n" | tee -a $mailReport
+if [ $recsInFeed -lt $minRecsInFeed ]; then
+   printf "Warning/Error - the downloaded feed contains less than the minimal limit of allowed records: $minRecsInFeed (variable minRecsInFeed)\n. This is curious. Rather TERMINATING\n" |  tee -a $mailReport
+   mail -s "bookport_import ERROR - the downloaded feed contains less than the minimal limit of allowed records" $adminMail <$mailReport
+   exit 1
+fi
 printf "OK\n\n";
 
 #DELETE: extract bookport ids from feed and database, compare and delete records that are currently not in feed
@@ -206,14 +218,66 @@ if [ -s "$dataScratch/$bkpDataSeq.match" ]; then
    rm -f "$dataScratch/bim"
    checkFileExists "$dataScratch/$bkpDataSeq.match.man25" 'Update records - 856 link, manage-25, updated records - procedure results';
    checkFileExists "$dataScratch/$bkpDataSeq.match.man25_refused" 'Update records - 856 link`, manage-25, refused records - procedure results';
-   printf "Running manage-18 to update 85640 field - URL to fulltext, log is $dataScratch/bookport.$dnes.manage18.update\n" | tee -a $mailReport
-   grep '^......... 85640' $dataScratch/$bkpDataSeq.match.man25 >$dataScratch/bookport.$dnes.manage18-url-update
-   cp "$dataScratch/bookport.$dnes.manage18-url-update" $dataScratch/buu
-   csh -f $aleph_proc/p_manage_18 "$BIBbase,buu,$bkpDataSeq.match.856.reject,$bkpDataSeq.match.856.doc_log,OLD,,,FULL,APP,M,,,bookport," >$dataScratch/bookport.$dnes.manage18.update
-   rm -f $dataScratch/buu
-   checkFileExists "$dataScratch/$bkpDataSeq.match.856.reject" 'Update 856 link to fulltext, manage-18, file with reject records';
-   checkFileExists "$alephe_scratch/$bkpDataSeq.match.856.doc_log" 'Update 856 link to fulltext, manage-18, file with imported records';
-   printf "Now, "`grep $ -c $alephe_scratch/$bkpDataSeq.match.856.doc_log`" records have been updated - 856 field iwith link to fulltext from the current Bookport feed" | tee -a $mailReport
+#RC1 20201016 - import by manage18 would replace 856 links also to other online fulltexts from other providers.
+#               The procedure was replaced by checking and update using X-server
+   awk '{print $1;}' $dataScratch/$bkpDataSeq.match.man25 | sort -u >$dataScratch/$bkpDataSeq.match.man25.sysnos
+   while read p; do
+      #call api and get link to bookport
+      curl -s "$xServerURL/X?op=find-doc&doc_num=$p""&base=$BIBbase" -o "$dataScratch/rec$p.tmp"
+      checkFileExists "$dataScratch/rec$p.tmp" 'Check URL to fulltext, RestAPI response is null';
+      oldFTurl=`xmllint -xpath "//varfield[@id='856']/subfield[@label='u' and contains(text(),'$bookportURLft')]/text()" "$dataScratch/rec$p.tmp"`
+      newFTurl=`grep '^'"$p"' 85640 L .*\$\$uhttp[s]://'"$bookportURLft" "$dataScratch/$bkpDataSeq.match.man25" | grep -o 'http[^\$]\+'`
+      if [ "$oldFTurl" != "$newFTurl" ]; then
+         printf "NOTICE - record $p - link to FullText has changed from $oldFTurl to $newFTurl" | tee -a $mailReport
+         cp "$dataScratch/rec$p.tmp" "$dataScratch/rec$p.new.tmp"
+         xmllint --shell "$dataScratch/rec$p.new.tmp" << EOF
+cd /find-doc/record/metadata/oai_marc/varfield[@id='856']/subfield[@label='u' and contains(text(),'$bookportURLft')]
+set "$newFTurl"
+save
+EOF
+      #rest api neumi PUT: curl -iv -X PUT -H "Content-Type: application/xml;charset=utf-8" -d @pokus.new 'http://localhost:1891/rest-dlf/record/OSU01001487730/'
+      #x-server: xml s daty musi byt jako promenna POST. To se mi pomoci curl nepovedlo, proto perlem:
+         echo <<EOF >$dataScratch/bookport.pl.tmp
+use warnings;
+use strict;
+use utf8;
+binmode(STDOUT, ":utf8");
+binmode(STDIN, ":utf8");
+use LWP;
+my @@bib_base="$BIBbase";
+my @@xserver_url="$xServerURL";
+my @@updatedoc_user="$xServerUser"; 
+my @@updatedoc_user_pas="$xServerPassword"; 
+my @@tdoc = do{local(@ARGV,@@/)='$dataScratch/rec$p.new.tmp';<>};
+my @@xrequest = LWP::UserAgent->new;
+my @@response_put = @@xrequest->post( @@xserver_url,
+       [ 'op' => 'update-doc',
+         'library' => @@bib_base,
+         'user_name' => @@updatedoc_user,
+         'user_password' => @@updatedoc_user_pas,
+         'doc_action' => 'UPDATE',
+         'doc_number' => @@sysno,
+         'xml_full_req' => @@tdoc ]
+       );
+if ( $response_put->is_success ) { print("OK - api call. This is response:\n".@@xrequest->request(@@response_put)."\n"; }
+else (print "ERROR pri update zaznamu, :".@@response_put->status_line."\n"; };
+EOF
+      
+         sed -i 's/@@/$/g' $dataScratch/bookport.pl.tmp
+         perl $dataScratch/bookport.pl.tmp
+      fi
+   done <$dataScratch/$bkpDataSeq.match.man25.sysnos
+   rm -f $dataScratch/$bkpDataSeq.match.man25.sysnos
+
+
+   #printf "Running manage-18 to update 85640 field - URL to fulltext, log is $dataScratch/bookport.$dnes.manage18.update\n" | tee -a $mailReport
+   #grep '^......... 85640' $dataScratch/$bkpDataSeq.match.man25 >$dataScratch/bookport.$dnes.manage18-url-update
+   #cp "$dataScratch/bookport.$dnes.manage18-url-update" $dataScratch/buu
+   #csh -f $aleph_proc/p_manage_18 "$BIBbase,buu,$bkpDataSeq.match.856.reject,$bkpDataSeq.match.856.doc_log,OLD,,,FULL,APP,M,,,bookport," >$dataScratch/bookport.$dnes.manage18.update
+   #rm -f $dataScratch/buu
+   #checkFileExists "$dataScratch/$bkpDataSeq.match.856.reject" 'Update 856 link to fulltext, manage-18, file with reject records';
+   #checkFileExists "$alephe_scratch/$bkpDataSeq.match.856.doc_log" 'Update 856 link to fulltext, manage-18, file with imported records';
+   #printf "Now, "`grep $ -c $alephe_scratch/$bkpDataSeq.match.856.doc_log`" records have been updated - 856 field iwith link to fulltext from the current Bookport feed" | tee -a $mailReport
 else
    printf "WARNING - no records with matching Bookport ID found - this is curious, there should be some, if this is not the very first import.\n\n" | tee -a $mailReport
 fi
