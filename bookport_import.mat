@@ -14,6 +14,11 @@
 
 #  By Matyas Bajger @osu.cz 202009
 
+#RC1 20211006 - blacklist to import added. Defined authors can be ommited from imporot. Not for censure, but for huge amount o ficitons and their translations in Bookport dataset.
+#    Downladed xml feed is checked against values in 'authors2del' array set below and if found in datafield code='100' the record is deleted from following import
+
+
+
 #INITAL PARAMETERS
 BIBbase='OSU01'
 adminMail='matyas.bajger@osu.cz' #send reports, errors, alerts to this address
@@ -22,8 +27,10 @@ maxRecsToDel=10 #if more records found for deleting than this limit, it is treat
 minRecsInFeed=1000 #if less records found in the downloaded feed data, it is treated as a potential error and script is terminated
 xServerURL='http://katalog.osu.cz' #URL  to Aleph X-Server API
 xServerUser='X-UPD-DOC' #User with rights to update doc by x-serverURL 
-xServerPassword='SteSpaq8' #      password 4 this user
+xServerPassword='blabla' #      password 4 this user
 bookportURLft='www.bookport.cz' #URL full text @ Bookport. It is used to differ this link from links to FT from other providers
+#RC1
+authors2del=("Morgan, Rice" "Blake, Pierce" "Sophie, Love" "Fiona, Grace" "Jack, Mars" "Mia, Gold") #Type authors that you wanf to be excluded from import.
 
 checkFileExists() 
 	{
@@ -72,6 +79,21 @@ if [ $recsInFeed -lt $minRecsInFeed ]; then
    exit 1
 fi
 printf "OK\n\n";
+
+#RC1 - remove unwanted authors
+cp $alephe_scratch/$bkpData $alephe_scratch/$bkpData.as_downloaded
+for i in ${!authors2del[@]}; do
+   a2d=${authors2del[$i]}
+   echo "Ommiting author $a2d" | tee -a $mailReport
+   xmllint --xpath '//*[local-name()="datafield"][@tag="100"]/child::node()[text()!="'"$a2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmp"
+   echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
+   echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
+   cat "$alephe_scratch/$bkpData.tmp" >>"$alephe_scratch/$bkpData"
+   rm -f "$alephe_scratch/$bkpData.tmp"
+   echo '</marc:collection>' >>"$alephe_scratch/$bkpData"
+done
+cp "$alephe_scratch/$bkpData" "$dataScratch/$bkpData"
+#RC1 end
 
 #DELETE: extract bookport ids from feed and database, compare and delete records that are currently not in feed
 #get IDs from feed
