@@ -24,6 +24,7 @@
 #                       /exlibris/product/bin/perl -MCPAN -eshell
 #                       install XML::Entities
 
+#RC3 20211122 - Xml data from Bookport contained <br> tags in annotation, but not escaped as entities. Remove them
 
 #INITAL PARAMETERS
 BIBbase='OSU01'
@@ -92,7 +93,10 @@ printf "OK\n\n";
 cat $alephe_scratch/$bkpData | /exlibris/aleph/matyas/bookport_xml_utf_decode.pl >$alephe_scratch/$bkpData.decoded
 mv $alephe_scratch/$bkpData.decoded $alephe_scratch/$bkpData
 
-#RC1.1 - remove unwanted authors and publishers
+#RC3 remove <br> tags in xml data
+sed -i 's/<br>//g' $alephe_scratch/$bkpData
+
+	#RC1.1 - remove unwanted authors and publishers
 cp $alephe_scratch/$bkpData $alephe_scratch/$bkpData.as_downloaded
 #authors
 for i in ${!authors2del[@]}; do
