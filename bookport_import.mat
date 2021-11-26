@@ -102,7 +102,7 @@ cp $alephe_scratch/$bkpData $alephe_scratch/$bkpData.as_downloaded
 for i in ${!authors2del[@]}; do
    a2d=${authors2del[$i]}
    echo "Ommiting author $a2d" | tee -a $mailReport
-   xmllint --xpath '//*[local-name()="datafield"][@tag="100"]/child::node()[text()!="'"$a2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmp"
+   xmllint --xpath '//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="'"$a2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmp"
    echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
    echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
    cat "$alephe_scratch/$bkpData.tmp" >>"$alephe_scratch/$bkpData"
@@ -113,7 +113,7 @@ done
 for i in ${!publishers2del[@]}; do
    p2d=${publishers2del[$i]}
    echo "Ommiting publisher $p2d" | tee -a $mailReport
-   xmllint --xpath '//*[local-name()="datafield"][@tag="264"]/child::node()[text()!="'"$p2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmpp"
+   xmllint --xpath '//*[local-name()="datafield"][@tag="264"]/child::node()[@code="b" and text()!="'"$p2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmpp"
    echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
    echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
    cat "$alephe_scratch/$bkpData.tmpp" >>"$alephe_scratch/$bkpData"
