@@ -23,6 +23,9 @@
 #               !! This script requires XML::Entities module, not included in Aleph perl distribution. To add in type as aleph linux user:
 #                       /exlibris/product/bin/perl -MCPAN -eshell
 #                       install XML::Entities
+#RC2.1 20211206 - XML entities decode causes also conversion of encoded html tags, like '%lt;br&gr;' to '<br>'. This makes result xml invalid. Unfortunately, some data, like annotation (520 field) contains there html tags
+#       Solved by "hard" sed conversion of &lt; &gt; &amp;  to  @lt; @gt; @amp; before running the entities conversion and than back to valid xml entities.
+
 
 #RC3 20211122 - Xml data from Bookport contained <br> tags in annotation, but not escaped as entities. Remove them
 
@@ -89,12 +92,6 @@ if [ $recsInFeed -lt $minRecsInFeed ]; then
 fi
 printf "OK\n\n";
 
-#RC2 decode xml utf entities
-cat $alephe_scratch/$bkpData | /exlibris/aleph/matyas/bookport_xml_utf_decode.pl >$alephe_scratch/$bkpData.decoded
-mv $alephe_scratch/$bkpData.decoded $alephe_scratch/$bkpData
-
-#RC3 remove <br> tags in xml data
-sed -i 's/<br>//g' $alephe_scratch/$bkpData
 
 	#RC1.1 - remove unwanted authors and publishers
 cp $alephe_scratch/$bkpData $alephe_scratch/$bkpData.as_downloaded
@@ -191,7 +188,23 @@ checkFileExists "$dataScratch/$bkpDataSeq.multi" 'matching the downloaded recs. 
 printf "Now, "`awk '{print $1;}' $dataScratch/$bkpDataSeq.new | sort -u | grep $ -c`" records found as NEW in the feed data.\n" | tee -a $mailReport
 
 if [ -s "$dataScratch/$bkpDataSeq.new" ]; then
-   echo "Running match by ISBN on them, manage-36, to find printed versions in the library collection. Log file is: $dataScratch/bookport.$dnes.manage36-isbn"
+   #RC2 decode xml utf entities, RC2.1 correction
+   printf "Performing UTF decode (bookport_xml_utf_decode.pl) on file $dataScratch/$bkpDataSeq.new   This really takes a while...\n";
+   sed -i 's/&lt;/@lt;/g' $dataScratch/$bkpDataSeq.new #RC2.1
+   sed -i 's/&gt;/@gt;/g' $dataScratch/$bkpDataSeq.new #RC2.1
+   sed -i 's/&amp;/@amp;/g' $dataScratch/$bkpDataSeq.new #RC2.1
+   cat $dataScratch/$bkpDataSeq.new | /exlibris/aleph/matyas/bookport_xml_utf_decode.pl >$dataScratch/$bkpDataSeq.new.decoded
+   sed -i 's/@lt;/\&lt;/g' $dataScratch/$bkpDataSeq.new #RC2.1
+   sed -i 's/@gt;/\&gt;/g' $dataScratch/$bkpDataSeq.new #RC2.1
+   sed -i 's/@amp;/\&amp;/g' $dataScratch/$bkpDataSeq.new #RC2.1
+   cat $dataScratch/$bkpDataSeq.new | /exlibris/aleph/matyas/bookport_xml_utf_decode.pl >$dataScratch/$bkpDataSeq.new.decoded
+   printf "done, result is:";
+   ls -la $dataScratch/$bkpDataSeq.new.decoded
+
+   cp $dataScratch/$bkpDataSeq.new.decoded $dataScratch/$bkpDataSeq.new
+   #RC2 end
+
+echo "Running match by ISBN on them, manage-36, to find printed versions in the library collection. Log file is: $dataScratch/bookport.$dnes.manage36-isbn"
    csh -f $aleph_proc/p_manage_36 "$BIBbase,$bkpDataSeq.new,$bkpDataSeq.new.ISBNnew,$bkpDataSeq.new.ISBNmatch,$bkpDataSeq.new.ISBNmulti,ISBN,,,N," > $dataScratch/bookport.$dnes.manage36-isbn
    checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNnew" 'matching the downloaded recs. aginst DB by ISBN - find printed versions manage-36';
    checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNmatch" 'matching the downloaded recs. aginst DB by ISBN - find printed versions manage-36';
