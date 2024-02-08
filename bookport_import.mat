@@ -127,7 +127,7 @@ for i in ${!publishers2del[@]}; do
    echo "Omitting publisher $p2d" | tee -a $mailReport
 cp $alephe_scratch/$bkpData $alephe_scratch/$bkpData.orig #TODO DEBUG
    #RC1.2 xmllint --xpath '//*[local-name()="datafield"][@tag="264"]/child::node()[@code="b" and text()!="'"$p2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmpp"
-   java -cp "$saxonPath" net.sf.saxon.Query -s:"$alephe_scratch/$bkpData" -qs:'//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="$p2d"]/parent::*/parent::*' -o:"$alephe_scratch/$bkpData.tmpp" #RC1.2
+   java -cp "$saxonPath" net.sf.saxon.Query -s:"$alephe_scratch/$bkpData" -qs:'//*[local-name()="datafield"][@tag="264"]/child::node()[@code="a" and text()!="$p2d"]/parent::*/parent::*' -o:"$alephe_scratch/$bkpData.tmpp" #RC1.2
    #RC1.2 echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
    #RC1.2 echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
    #RC1.2 cat "$alephe_scratch/$bkpData.tmpp" >>"$alephe_scratch/$bkpData"
