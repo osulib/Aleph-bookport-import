@@ -34,18 +34,12 @@
 
 #INITAL PARAMETERS
 BIBbase='OSU01'
-adminMail='matyas.bajger@osu.cz' #send reports, errors, alerts to this address
-#rok 2022 bookportFeed='https://www.bookport.cz/marc21-12477.xml' 
-#nasledujici radek je feed kolekce pro OU pro rok 2023. Ma Byt pouzivan do 9.10.2023. Pak nastaven kompletni feed (koupena cela kolekce]
-#bookportFeed='https://www.bookport.cz/marc21-15548.xml' #URL where current data of available e-books can be downloaded in MarcXML format
-#kompletni kolekece, stahovano opet od 202310101
+adminMail='system.librarian@library.any' #send reports, errors, alerts to this address
 bookportFeed='https://www.bookport.cz/marc21.xml' #URL where current data of available e-books can be downloaded in MarcXML format
-#kompletni kolekce (meli jsme do 31.12.2021] ma feed url: https://www.bookport.cz/marc21.xml
-#od 1.1.2022 mame jen kolekce Business, Medicína, Technika, Pedagogika, psychologie a společenské vědy- pro ne nam definovali feed https://www.bookport.cz/marc21-12477.xml 
 maxRecsToDel=10 #if more records found for deleting than this limit, it is treated as a potential error. No recs are really deleted, just an email is send to $aminMail
 minRecsInFeed=1000 #if less records found in the downloaded feed data, it is treated as a potential error and script is terminated
-xServerURL='http://katalog.osu.cz' #URL  to Aleph X-Server API
-xServerUser='userName' #User with rights to update doc by x-serverURL 
+xServerURL='http://aleph.library.any' #URL  to Aleph X-Server API
+xServerUser='user' #User with rights to update doc by x-serverURL 
 xServerPassword='password' #      password 4 this user
 bookportURLft='www.bookport.cz' #URL full text @ Bookport. It is used to differ this link from links to FT from other providers
 #RC1.1
@@ -120,10 +114,11 @@ for i in ${!authors2del[@]}; do
    echo "Omitting author $a2d" | tee -a $mailReport
    #RC1.2 xmllint --xpath '//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="'"$a2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmp"
    java -cp "$saxonPath" net.sf.saxon.Query -s:"$alephe_scratch/$bkpData" -qs:'//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="$a2d"]/parent::*/parent::*' -o:"$alephe_scratch/$bkpData.tmp" #RC1.2
-   echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
-   echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
-   cat "$alephe_scratch/$bkpData.tmp" >>"$alephe_scratch/$bkpData"
-   rm -f "$alephe_scratch/$bkpData.tmp"
+   #RC1.2 echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
+   #RC1.2 echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
+   #RC1.2 cat "$alephe_scratch/$bkpData.tmp" >>"$alephe_scratch/$bkpData"
+   #RC1.2 rm -f "$alephe_scratch/$bkpData.tmp"
+   sed 's/<?xml version="1.0" encoding="UTF-8"?>/<?xml version="1.0" encoding="UTF-8"?><marc:collection xmlns:marc="http:\/\/www.loc.gov\/MARC21\/slim" xmlns:xsi="http:\/\/www.w3.org\/2001\/XMLSchema-instance" xsi:schemaLocation="http:\/\/www.loc.gov\/MARC21\/slim http:\/\/www.loc.gov\/standards\/marcxml\/schema\/MARC21slim.xsd">/' "$alephe_scratch/$bkpData.tmp" >"$alephe_scratch/$bkpData" #RC1.2
    echo '</marc:collection>' >>"$alephe_scratch/$bkpData"
 done
 #publishers
@@ -133,10 +128,11 @@ for i in ${!publishers2del[@]}; do
 cp $alephe_scratch/$bkpData $alephe_scratch/$bkpData.orig #TODO DEBUG
    #RC1.2 xmllint --xpath '//*[local-name()="datafield"][@tag="264"]/child::node()[@code="b" and text()!="'"$p2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmpp"
    java -cp "$saxonPath" net.sf.saxon.Query -s:"$alephe_scratch/$bkpData" -qs:'//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="$p2d"]/parent::*/parent::*' -o:"$alephe_scratch/$bkpData.tmpp" #RC1.2
-   echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
-   echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
-   cat "$alephe_scratch/$bkpData.tmpp" >>"$alephe_scratch/$bkpData"
-   # -f "$alephe_scratch/$bkpData.tmpp" #TODO DEBUG odkomentuj
+   #RC1.2 echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
+   #RC1.2 echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
+   #RC1.2 cat "$alephe_scratch/$bkpData.tmpp" >>"$alephe_scratch/$bkpData"
+   #RC1.2  rm -f "$alephe_scratch/$bkpData.tmpp" 
+   sed 's/<?xml version="1.0" encoding="UTF-8"?>/<?xml version="1.0" encoding="UTF-8"?><marc:collection xmlns:marc="http:\/\/www.loc.gov\/MARC21\/slim" xmlns:xsi="http:\/\/www.w3.org\/2001\/XMLSchema-instance" xsi:schemaLocation="http:\/\/www.loc.gov\/MARC21\/slim http:\/\/www.loc.gov\/standards\/marcxml\/schema\/MARC21slim.xsd">/' "$alephe_scratch/$bkpData.tmpp" >"$alephe_scratch/$bkpData" #RC1.2
    echo '</marc:collection>' >>"$alephe_scratch/$bkpData"
 done
 
