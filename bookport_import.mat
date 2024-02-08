@@ -16,33 +16,50 @@
 
 #RC1.1 20211021 - blacklist to import added. Defined authors or publishers can be ommited from imporot. Not for censure, but for huge amount o ficitons and their translations in Bookport dataset.
 #    Downladed xml feed is checked against values in arrays 'authors2del' and 'publishers2del' set below and if found in datafield code='100' the record is deleted from following import
+#RC1.2 20240208 - xmllint caused encoding utf chars. replaced by saxon
 
 #RC2 20211108 - Bookport xml feeds now contain encoded utf-8 hexa entities. Aleph procedure  file-02 (converts marcxml to Aleph sequential) does not encode these entities and leave them as they are.
 #               This resulted in unreadable characters in result.
 #               Solved by external perl bookport_xml_utf_decode.pl small script, which is called for conversion.
 #               !! This script requires XML::Entities module, not included in Aleph perl distribution. To add in type as aleph linux user:
-#                       /exlibris/product/bin/perl -MCPAN -eshell
-#                       install XML::Entities
+#			/exlibris/product/bin/perl -MCPAN -eshell
+#			install XML::Entities
 #RC2.1 20211206 - XML entities decode causes also conversion of encoded html tags, like '%lt;br&gr;' to '<br>'. This makes result xml invalid. Unfortunately, some data, like annotation (520 field) contains there html tags
-#       Solved by "hard" sed conversion of &lt; &gt; &amp;  to  @lt; @gt; @amp; before running the entities conversion and than back to valid xml entities.
+#	Solved by "hard" sed conversion of &lt; &gt; &amp;  to  @lt; @gt; @amp; before running the entities conversion and than back to valid xml entities.
 
+#RC3ver2 20211126 - Xml data from Bookport contained <br>, other html tags and unescaped ampersand & in annotation, but not escaped as entities. Remove them
 
-#RC3 20211122 - Xml data from Bookport contained <br> tags in annotation, but not escaped as entities. Remove them
+#RC4 20230112 - manage-18 input file must be in aleph sequential format
+
 
 #INITAL PARAMETERS
 BIBbase='OSU01'
 adminMail='matyas.bajger@osu.cz' #send reports, errors, alerts to this address
+#rok 2022 bookportFeed='https://www.bookport.cz/marc21-12477.xml' 
+#nasledujici radek je feed kolekce pro OU pro rok 2023. Ma Byt pouzivan do 9.10.2023. Pak nastaven kompletni feed (koupena cela kolekce]
+#bookportFeed='https://www.bookport.cz/marc21-15548.xml' #URL where current data of available e-books can be downloaded in MarcXML format
+#kompletni kolekece, stahovano opet od 202310101
 bookportFeed='https://www.bookport.cz/marc21.xml' #URL where current data of available e-books can be downloaded in MarcXML format
+#kompletni kolekce (meli jsme do 31.12.2021] ma feed url: https://www.bookport.cz/marc21.xml
+#od 1.1.2022 mame jen kolekce Business, Medicína, Technika, Pedagogika, psychologie a společenské vědy- pro ne nam definovali feed https://www.bookport.cz/marc21-12477.xml 
 maxRecsToDel=10 #if more records found for deleting than this limit, it is treated as a potential error. No recs are really deleted, just an email is send to $aminMail
 minRecsInFeed=1000 #if less records found in the downloaded feed data, it is treated as a potential error and script is terminated
 xServerURL='http://katalog.osu.cz' #URL  to Aleph X-Server API
-xServerUser='X-UPD-DOC' #User with rights to update doc by x-serverURL 
-xServerPassword='blabla' #      password 4 this user
+xServerUser='userName' #User with rights to update doc by x-serverURL 
+xServerPassword='password' #      password 4 this user
 bookportURLft='www.bookport.cz' #URL full text @ Bookport. It is used to differ this link from links to FT from other providers
 #RC1.1
-authors2del=("Morgan, Rice" "Blake, Pierce" "Sophie, Love" "Fiona, Grace" "Jack, Mars" "Mia, Gold") #Type authors that you wanf to be excluded from import.
+#for example: authors2del=("Morgan, Rice" "Blake, Pierce" "Sophie, Love" "Fiona, Grace" "Jack, Mars" "Mia, Gold") #Type authors that you wanf to be excluded from import.
+#for example: publishers2del=("Lukeman Literary" "Lukeman Literary,") #Type publishers that you want to be excluded from import.
+                                    #Mind, that exact match to subfield value is performed. If you use punctuation, like comma at the end. You must provide value including this punctuation (comma]
 publishers2del=("Lukeman Literary" "Lukeman Literary,") #Type publishers that you want to be excluded from import.
                                     #Mind, that exact match to subfield value is performed. If you use punctuation, like comma at the end. You must provide value including this punctuation (comma]
+saxonPath="/exlibris/product/saxon/saxon.jar" #path to saxon JAR file. RC1.2
+
+
+#PARAMETERS END
+
+
 
 checkFileExists() 
 	{
@@ -76,10 +93,8 @@ mailReport="$dataScratch/bookport_$dnes.mail"
 #download feed
 printf "START `date`\n\n"
 echo "downloading feed from $bookportFeed"
-#TODO asas feed bzl praydny, p[rebito starsim downloaded, az bude plny pust to, Matyas 20201020
-bkpData="bookport_feed_20201008.xml";
-#bkpData="bookport_feed_$dnes.xml";
-#curl -k "$bookportFeed" -o "$alephe_scratch/$bkpData"
+bkpData="bookport_feed_$dnes.xml";
+curl -k "$bookportFeed" -o "$alephe_scratch/$bkpData"
 checkFileExists "$alephe_scratch/$bkpData" 'download Bookport xml feed';
 checkFileNotZero "$alephe_scratch/$bkpData" 'download Bookport xml feed';
 cp "$alephe_scratch/$bkpData" "$dataScratch/$bkpData"
@@ -93,13 +108,18 @@ fi
 printf "OK\n\n";
 
 
-	#RC1.1 - remove unwanted authors and publishers
+#RC3ver2 remove <br> and other html tags in xml data
+sed 's/<\s*\/*\s*a\s*>//g' $alephe_scratch/$bkpData | sed 's/<\s*\/*\s*b\s*>//g' | sed 's/<\s*\/*\s*em\s*>//g' | sed 's/<\s*\/*\s*font\s*>//g' | sed 's/<\s*\/*\s*i\s*>//g' | sed 's/<\s*\/*\s*p\s*>//g' | sed 's/<\s*\/*\s*span\s*>//g' | sed 's/<\s*\/*\s*br\s*>//g' | sed 's/<\s*\/*\s*strong\s*>//g' | sed 's/&/&amp;/g' >$alephe_scratch/$bkpData.sed
+mv $alephe_scratch/$bkpData.sed $alephe_scratch/$bkpData
+
+#RC1.1 - remove unwanted authors and publishers
 cp $alephe_scratch/$bkpData $alephe_scratch/$bkpData.as_downloaded
 #authors
 for i in ${!authors2del[@]}; do
    a2d=${authors2del[$i]}
-   echo "Ommiting author $a2d" | tee -a $mailReport
-   xmllint --xpath '//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="'"$a2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmp"
+   echo "Omitting author $a2d" | tee -a $mailReport
+   #RC1.2 xmllint --xpath '//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="'"$a2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmp"
+   java -cp "$saxonPath" net.sf.saxon.Query -s:"$alephe_scratch/$bkpData" -qs:'//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="$a2d"]/parent::*/parent::*' -o:"$alephe_scratch/$bkpData.tmp" #RC1.2
    echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
    echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
    cat "$alephe_scratch/$bkpData.tmp" >>"$alephe_scratch/$bkpData"
@@ -109,17 +129,24 @@ done
 #publishers
 for i in ${!publishers2del[@]}; do
    p2d=${publishers2del[$i]}
-   echo "Ommiting publisher $p2d" | tee -a $mailReport
-   xmllint --xpath '//*[local-name()="datafield"][@tag="264"]/child::node()[@code="b" and text()!="'"$p2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmpp"
+   echo "Omitting publisher $p2d" | tee -a $mailReport
+cp $alephe_scratch/$bkpData $alephe_scratch/$bkpData.orig #TODO DEBUG
+   #RC1.2 xmllint --xpath '//*[local-name()="datafield"][@tag="264"]/child::node()[@code="b" and text()!="'"$p2d"'"]/parent::*/parent::*' $alephe_scratch/$bkpData >"$alephe_scratch/$bkpData.tmpp"
+   java -cp "$saxonPath" net.sf.saxon.Query -s:"$alephe_scratch/$bkpData" -qs:'//*[local-name()="datafield"][@tag="100"]/child::node()[@code="a" and text()!="$p2d"]/parent::*/parent::*' -o:"$alephe_scratch/$bkpData.tmpp" #RC1.2
    echo '<?xml version="1.0" encoding="utf-8"?>' >"$alephe_scratch/$bkpData"
    echo '<marc:collection xmlns:marc="http://www.loc.gov/MARC21/slim" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.loc.gov/MARC21/slim http://www.loc.gov/standards/marcxml/schema/MARC21slim.xsd">' >>"$alephe_scratch/$bkpData"
    cat "$alephe_scratch/$bkpData.tmpp" >>"$alephe_scratch/$bkpData"
-   rm -f "$alephe_scratch/$bkpData.tmpp"
+   # -f "$alephe_scratch/$bkpData.tmpp" #TODO DEBUG odkomentuj
    echo '</marc:collection>' >>"$alephe_scratch/$bkpData"
 done
 
 cp "$alephe_scratch/$bkpData" "$dataScratch/$bkpData"
 #RC1.1 end
+
+#TODO DEBUG
+echo original file is  $alephe_scratch/$bkpData.orig
+echo result of xmllint is "$alephe_scratch/$bkpData.tmpp"
+echo final file is  $alephe_scratch/$bkpData.orig
 
 #DELETE: extract bookport ids from feed and database, compare and delete records that are currently not in feed
 #get IDs from feed
@@ -140,16 +167,40 @@ checkFileNotZero "$alephe_scratch/bookport.sysna" 'retrieving current Bookport r
 grep '^......... BOOKP' $dataScratch/bookport.$dnes.seq | sed 's/^.*\$\$a//' | sort -u > $dataScratch/bookport.tmp.dataids
 #compare
 comm -13 "$dataScratch/bookport.tmp.feedids" "$dataScratch/bookport.tmp.dataids" >$alephe_scratch/bookport.$dnes.ids2delete
-noRecToDel=`grep $ -c $alephe_scratch/bookport.$dnes.ids2delete`
+noRecToDel=`grep $ -c $alephe_scratch/bookport.$dnes.ids2delete | bc`
 if [ $noRecToDel -eq 0 ]; then
 	printf "No records has been withdrawn from the collection, nothing to delete.\n\n" | tee -a $mailReport
 elif [  $noRecToDel -gt $maxRecsToDel ]; then
 	printf "WARNING. $noRecToDel found to be deleted. This is more than limit $maxRecsToDel set by variable maxRecsToDel.\nThis could be an error. NO RECORDS WILL BE DELETED.\nI just send mail alert to $adminMail.\n\n" | tee -a $mailReport
-        mail -s 'TOO many records from Bookport to be deleted.' $adminMail < $alephe_scratch/bookport.$dnes.ids2delete
+        sed 's/^/ BOOKP L $$a/'  $alephe_scratch/bookport.$dnes.ids2delete > $alephe_scratch/bookport.$dnes.ids2delete.tmp
+        grep -f $alephe_scratch/bookport.$dnes.ids2delete.tmp $dataScratch/bookport.$dnes.seq | awk '{print $1"OSU01";}' | sort -u >$alephe_scratch/bookport.$dnes.sys2delete
+        #grep '^......... BOOKP' $dataScratch/bookport.$dnes.seq | sort -u > $dataScratch/bookport.tmp.dataids2
+        mail -s 'TOO many records from Bookport to be deleted (to be found also in file aes/b2d).' $adminMail < $alephe_scratch/bookport.$dnes.sys2delete
+        cp $alephe_scratch/bookport.$dnes.sys2delete $alephe_scratch/b2d
+        rm -f $alephe_scratch/bookport*tmp
 else
 	#delete
+        echo "There are $noRecToDel to be deleted. Their list (sysnos) is here $alephe_scratch/bookport.$dnes.ids2delete" | tee -a $mailReport
 	sed -i 's/^/\$\$a/' "$alephe_scratch/bookport.$dnes.ids2delete"
-	grep -f "$alephe_scratch/bookport.$dnes.ids2delete" "$dataScratch/bookport.$dnes.seq" >"$dataScratch/bookport.$dnes.2del"
+        #RC20201123 - records that have physical items or link to online version by other provider cannot be deleted, remove them from delete and alert admin
+        grep -e '^......... 85640' -e '^......... Z30' "$dataScratch/bookport.$dnes.seq" | grep -v "$bookportURLft" | awk '{print "^"$1;}' >$dataScratch/bookport.$dnes.sysnos_other
+
+	#grep -f "$alephe_scratch/bookport.$dnes.ids2delete" "$dataScratch/bookport.$dnes.seq" >"$dataScratch/bookport.$dnes.2del"
+	#20230522 grep -f "$alephe_scratch/bookport.$dnes.ids2delete" "$dataScratch/bookport.$dnes.seq" | grep -v -f $dataScratch/bookport.$dnes.sysnos_other >"$alephe_scratch/bookport.$dnes.2del"
+        grep -f "$alephe_scratch/bookport.$dnes.ids2delete" "$dataScratch/bookport.$dnes.seq" | awk '{print $1"BIBbase";}' | sed "s/BIBbase/$BIBbase/" >"$alephe_scratch/bookport.$dnes.2del"
+        if [ ! -s  $dataScratch/bookport.$dnes.sysnos_other ]; then
+           printf "NOTICE ! following records that has been withdrawin from Bookport collection cannot be deleted. They link to other online version or have physical items:\n" | tee -a $mailReport
+           cat $dataScratch/bookport.$dnes.sysnos_other | tee -a $mailReport
+           printf "\n\n" | tee -a $mailReport
+        fi
+        
+        #rm -f $dataScratch/bookport.$dnes.sysnos_other 
+        #RC20201123 end
+        #RC20201207  backup of deleted files
+        echo "Backup of deleted records (print-03), log is $dataScratch/bookport.$dnes.deleted.print03"
+        csh -f $aleph_proc/p_print_03 "$BIBbase,bookport.$dnes.2del,ALL,,,,,,,,bookport.$dnes.deleted.seq,A,,Z30,,N," >"$dataScratch/bookport.$dnes.deleted.print03"
+
+        #RC20201207 end
 	printf "Running procedure manage-18 deleting records that has been withdrawn from the collection, log is  $dataScratch/bookport.$dnes.manage-18.delete\n\n"
         csh -f $aleph_proc/p_manage_18 "$BIBbase,bookport.$dnes.2del,bookport.$dnes.2del.reject,bookport.$dnes.2del.doc_log,OLD,,,FULL,DELDOC,M,,,bookport," >$dataScratch/bookport.$dnes.manage-18.delete
         if [ -s "$data_scratch/bookport.$dnes.2del.reject" ]; then
@@ -183,13 +234,20 @@ checkFileExists "$dataScratch/$bkpDataSeq.new" 'matching the downloaded recs. ag
 checkFileExists "$dataScratch/$bkpDataSeq.match" 'matching the downloaded recs. aginst DB by Bookport ID - match records manage-36 ';
 checkFileExists "$dataScratch/$bkpDataSeq.multi" 'matching the downloaded recs. aginst DB by Bookport ID - more-than-one-match records manage-36';
 
+
+
+
 #new
 #new records - match by ISBN to find printed versions
 printf "Now, "`awk '{print $1;}' $dataScratch/$bkpDataSeq.new | sort -u | grep $ -c`" records found as NEW in the feed data.\n" | tee -a $mailReport
 
+
 if [ -s "$dataScratch/$bkpDataSeq.new" ]; then
+
    #RC2 decode xml utf entities, RC2.1 correction
    printf "Performing UTF decode (bookport_xml_utf_decode.pl) on file $dataScratch/$bkpDataSeq.new   This really takes a while...\n";
+#TODO DEBUG - leave original file for checking the following process
+cp  $dataScratch/$bkpDataSeq.new  $dataScratch/$bkpDataSeq.new.original_not_decoded.debug
    sed -i 's/&lt;/@lt;/g' $dataScratch/$bkpDataSeq.new #RC2.1
    sed -i 's/&gt;/@gt;/g' $dataScratch/$bkpDataSeq.new #RC2.1
    sed -i 's/&amp;/@amp;/g' $dataScratch/$bkpDataSeq.new #RC2.1
@@ -197,14 +255,12 @@ if [ -s "$dataScratch/$bkpDataSeq.new" ]; then
    sed -i 's/@lt;/\&lt;/g' $dataScratch/$bkpDataSeq.new #RC2.1
    sed -i 's/@gt;/\&gt;/g' $dataScratch/$bkpDataSeq.new #RC2.1
    sed -i 's/@amp;/\&amp;/g' $dataScratch/$bkpDataSeq.new #RC2.1
-   cat $dataScratch/$bkpDataSeq.new | /exlibris/aleph/matyas/bookport_xml_utf_decode.pl >$dataScratch/$bkpDataSeq.new.decoded
    printf "done, result is:";
    ls -la $dataScratch/$bkpDataSeq.new.decoded
 
    cp $dataScratch/$bkpDataSeq.new.decoded $dataScratch/$bkpDataSeq.new
    #RC2 end
-
-echo "Running match by ISBN on them, manage-36, to find printed versions in the library collection. Log file is: $dataScratch/bookport.$dnes.manage36-isbn"
+   echo "Running match by ISBN on them, manage-36, to find printed versions in the library collection. Log file is: $dataScratch/bookport.$dnes.manage36-isbn"
    csh -f $aleph_proc/p_manage_36 "$BIBbase,$bkpDataSeq.new,$bkpDataSeq.new.ISBNnew,$bkpDataSeq.new.ISBNmatch,$bkpDataSeq.new.ISBNmulti,ISBN,,,N," > $dataScratch/bookport.$dnes.manage36-isbn
    checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNnew" 'matching the downloaded recs. aginst DB by ISBN - find printed versions manage-36';
    checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNmatch" 'matching the downloaded recs. aginst DB by ISBN - find printed versions manage-36';
@@ -246,7 +302,7 @@ echo "Running match by ISBN on them, manage-36, to find printed versions in the 
            fi
            if [ -s "$dataScratch/$bkpDataSeq.new.ISBNmatch.man25" ]; then
 	      #select fields and import them
-              grep -e '^......... 020' -e '^......... 856' -e '^......... BOOKP' $dataScratch/$bkpDataSeq.new.ISBNmatch.man25 | grep -v 'q.print' >$dataScratch/$bkpDataSeq.new.ISBNmatch.2imp
+              grep -e '^......... BAS' -e '^......... 020' -e '^......... 856' -e '^......... BOOKP' $dataScratch/$bkpDataSeq.new.ISBNmatch.man25 | grep -v 'q.print' >$dataScratch/$bkpDataSeq.new.ISBNmatch.2imp
               printf "Adding ebook fields to printed versions, manage-18, its logfile is $dataScratch/bookport.$dnes.manage18-printed-update.\n"
 	      csh -f $aleph_proc/p_manage_18 "$BIBbase,$bkpDataSeq.new.ISBNmatch.2imp,$bkpDataSeq.new.ISBNmatch.2imp.reject,$bkpDataSeq.new.ISBNmatch.2imp.doc_log,OLD,,,FULL,APP,M,,,bookport," >$dataScratch/bookport.$dnes.manage18-printed-update
               checkFileExists "$dataScratch/$bkpDataSeq.new.ISBNmatch.2imp.reject" 'Add ebook to printed records, manage-18, file with reject records';
@@ -289,12 +345,17 @@ if [ -s "$dataScratch/$bkpDataSeq.match" ]; then
       #call api and get link to bookport
       curl -s "$xServerURL/X?op=find-doc&doc_num=$p""&base=$BIBbase" -o "$dataScratch/rec$p.tmp"
       checkFileExists "$dataScratch/rec$p.tmp" 'Check URL to fulltext, RestAPI response is null';
-      oldFTurl=`xmllint -xpath "//varfield[@id='856']/subfield[@label='u' and contains(text(),'$bookportURLft')]/text()" "$dataScratch/rec$p.tmp"`
-      newFTurl=`grep '^'"$p"' 85640 L .*\$\$uhttp[s]://'"$bookportURLft" "$dataScratch/$bkpDataSeq.match.man25" | grep -o 'http[^\$]\+'`
-      if [ "$oldFTurl" != "$newFTurl" ]; then
-         printf "NOTICE - record $p - link to FullText has changed from $oldFTurl to $newFTurl" | tee -a $mailReport
-         cp "$dataScratch/rec$p.tmp" "$dataScratch/rec$p.new.tmp"
-         xmllint --shell "$dataScratch/rec$p.new.tmp" << EOF
+      #20230307 kontorla jestli puvodni zaznam nema vice linku na bookport, pak nelze aktualizovat
+      countOldFTurl=`xmllint -xpath "count(//varfield[@id='856']/subfield[@label='u' and contains(text(),'$bookportURLft')])" "$dataScratch/rec$p.tmp" `  
+      if [ "$countOldFTurl" != "1" ]; then
+          echo "NOTICE - record $p - has more than one fulltext links to $bookportURLft. It cannon be checked"  | tee -a $mailReport
+      else 
+         oldFTurl=`xmllint -xpath "//varfield[@id='856']/subfield[@label='u' and contains(text(),'$bookportURLft')]/text()" "$dataScratch/rec$p.tmp"`
+         newFTurl=`grep '^'"$p"' 85640 L .*\$\$uhttp[s]://'"$bookportURLft" "$dataScratch/$bkpDataSeq.match.man25" | grep -o 'http[^\$]\+'`
+         if [ "$oldFTurl" != "$newFTurl" ]; then
+            printf "NOTICE - record $p - link to FullText has changed from $oldFTurl to $newFTurl \n" | tee -a $mailReport
+            cp "$dataScratch/rec$p.tmp" "$dataScratch/rec$p.new.tmp"
+            xmllint --shell "$dataScratch/rec$p.new.tmp" << EOF
 cd /find-doc/record/metadata/oai_marc/varfield[@id='856']/subfield[@label='u' and contains(text(),'$bookportURLft')]
 set "$newFTurl"
 save
@@ -326,9 +387,10 @@ my @@response_put = @@xrequest->post( @@xserver_url,
 if ( $response_put->is_success ) { print("OK - api call. This is response:\n".@@xrequest->request(@@response_put)."\n"; }
 else (print "ERROR pri update zaznamu, :".@@response_put->status_line."\n"; };
 EOF
-      
-         sed -i 's/@@/$/g' $dataScratch/bookport.pl.tmp
-         perl $dataScratch/bookport.pl.tmp
+       
+            sed -i 's/@@/$/g' $dataScratch/bookport.pl.tmp
+            perl $dataScratch/bookport.pl.tmp
+         fi
       fi
    done <$dataScratch/$bkpDataSeq.match.man25.sysnos
    rm -f $dataScratch/$bkpDataSeq.match.man25.sysnos
@@ -352,6 +414,8 @@ if [ -s "$dataScratch/$bkpDataSeq.multi" ]; then
    cat $dataScratch/$bkpDataSeq.multi | tee -a $mailReport
    printf "\n\n\n" | tee -a $mailReport
 fi
+
+rm -f $dataScratch/bookp*tmp
 
 mail -s "Bookport import results" $adminMail <$mailReport
 
